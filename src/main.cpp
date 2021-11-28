@@ -2,11 +2,14 @@
 
 #include <TFT_eSPI.h> 
 #include <SPI.h>
-#include "WiFi.h"
+#include <WiFi.h>
 #include <Wire.h>
+#include <ESP32Ping.h>
 #include <Button2.h>
-#include "esp_adc_cal.h"
-#include "bmp.h"
+#include <esp_adc_cal.h>
+#include <time.h>
+
+#include "config.h"
 
 #ifndef TFT_DISPOFF
 #define TFT_DISPOFF 0x28
@@ -21,28 +24,103 @@
 #define BUTTON_1        35
 #define BUTTON_2        0
 
+#define BRIGHTNESS_MIN  5
+
+#ifndef CONFIG_EXTERNAL
+const char *ssid = "your_sid";
+const char *password = "your_password";
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 3600; //germany offset versus GMT
+const int daylightOffset_sec = 3600;  // called "sommerzeit" in germany.
+const IPAddress googledns_ip(8,8,8,8); //google dns
+#endif
+
+
+const uint8_t ledChannel = 1;
+uint16_t lastState = TFT_DARKGREY;
+uint8_t currentBrightness = 255;
+uint16_t dimmTimeout = 3000; // time in ms 10000= 10 secs
+
 TFT_eSPI tft = TFT_eSPI(135, 240); // Invoke custom library
 Button2 btn1(BUTTON_1);
 Button2 btn2(BUTTON_2);
 
-char buff[512];
-int vref = 1100;
-int btnCick = false;
+void autodimm(bool reset = false)
+{
+    static uint16_t time_of_dimReset = millis();
+    if (reset)
+    {
+        time_of_dimReset = millis();
+        currentBrightness = 255;
+        ledcWrite(ledChannel, currentBrightness);
+        return;
+    }
+
+    if((time_of_dimReset + dimmTimeout) < millis())
+    {
+        currentBrightness = max(currentBrightness - 2, BRIGHTNESS_MIN);
+        ledcWrite(ledChannel, currentBrightness); // 0-15, 0-255 (with 8 bit resolution)
+    }
+}
+
+void setColorState(uint16_t newState)
+{
+    if (lastState != newState)
+    {
+        tft.fillScreen(newState);
+        lastState = newState;
+        autodimm(true);
+
+        //setColorState(TFT_RED);
+        tft.setTextColor(TFT_BLACK,newState);
+        tft.setRotation(3);
+        tft.setTextDatum(MC_DATUM);
+        char buff[255];
+        struct tm timeinfo;
+        //if(newState == TFT_GREEN)
+        {
+        if (!getLocalTime(&timeinfo))
+        {
+            //Serial.println("Failed to obtain time");
+            return;
+        }
+        strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &timeinfo);
+        //tft.println(buff);
+        tft.drawString("Last Update:", tft.width() / 2, tft.height() / 2 - tft.fontHeight() - 2);
+        tft.drawString(buff, tft.width() / 2, tft.height() / 2);
+        }
+    }
+}
+
+wl_status_t wifi_connect()
+{
+    setColorState(TFT_ORANGE);
+    WiFi.mode(WIFI_MODE_STA);
+    WiFi.disconnect(false, true);
+    WiFi.begin(ssid, password);
+    
+    int8_t retries = 2;
+    while (WiFi.status() != WL_CONNECTED && retries > 0)
+    {
+        Serial.println("Connecting to WiFi..");
+        delay(2500);
+        retries--;
+    }
+    return WiFi.status();
+}
 
 void wifi_scan()
 {
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.fillScreen(TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
 
-    tft.drawString("Scan Network", tft.width() / 2, tft.height() / 2);
-
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(WIFI_MODE_STA);
     WiFi.disconnect();
-    delay(100);
 
     int16_t n = WiFi.scanNetworks();
+    
+
     tft.fillScreen(TFT_BLACK);
     if (n == 0) {
         tft.drawString("no networks found", tft.width() / 2, tft.height() / 2);
@@ -50,6 +128,7 @@ void wifi_scan()
         tft.setTextDatum(TL_DATUM);
         tft.setCursor(0, 0);
         Serial.printf("Found %d net\n", n);
+        char buff[255];
         for (int i = 0; i < n; ++i) {
             sprintf(buff,
                     "[%d]:%s(%d)",
@@ -62,57 +141,28 @@ void wifi_scan()
     WiFi.mode(WIFI_OFF);
 }
 
-//! Long time delay, it is recommended to use shallow sleep, which can effectively reduce the current consumption
-void espDelay(int ms)
-{   
-    esp_sleep_enable_timer_wakeup(ms * 1000);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,ESP_PD_OPTION_ON);
-    esp_light_sleep_start();
-}
-
-void showVoltage()
-{
-    static uint64_t timeStamp = 0;
-    if (millis() - timeStamp > 1000) {
-        timeStamp = millis();
-        uint16_t v = analogRead(ADC_PIN);
-        float battery_voltage = ((float)v / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
-        String voltage = "Voltage :" + String(battery_voltage) + "V";
-        Serial.println(voltage);
-        tft.fillScreen(TFT_BLACK);
-        tft.setTextDatum(MC_DATUM);
-        tft.drawString(voltage,  tft.width() / 2, tft.height() / 2 );
-    }
-}
-
 void button_init()
 {
-    btn1.setLongClickHandler([](Button2 & b) {
-        btnCick = false;
-        int r = digitalRead(TFT_BL);
-        tft.fillScreen(TFT_BLACK);
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.setTextDatum(MC_DATUM);
-        tft.drawString("Press again to wake up",  tft.width() / 2, tft.height() / 2 );
-        espDelay(6000);
-        digitalWrite(TFT_BL, !r);
-
-        tft.writecommand(TFT_DISPOFF);
-        tft.writecommand(TFT_SLPIN);
-        esp_sleep_enable_ext1_wakeup(GPIO_SEL_35, ESP_EXT1_WAKEUP_ALL_LOW);
-        esp_deep_sleep_start();
-    });
-    btn1.setPressedHandler([](Button2 & b) {
-        Serial.println("Detect Voltage..");
-        btnCick = true;
+    btn1.setPressedHandler([](Button2 & b) 
+    {
+        autodimm(true);        
     });
 
     btn2.setPressedHandler([](Button2 & b) {
-        btnCick = false;
-        Serial.println("btn press wifi scan");
-        wifi_scan();
     });
 }
+
+void ping()
+{
+    if(Ping.ping(googledns_ip,1))
+    {
+        setColorState(TFT_GREEN);
+        autodimm();
+        return;
+    }
+    setColorState(TFT_RED);
+}
+
 
 void button_loop()
 {
@@ -120,62 +170,108 @@ void button_loop()
     btn2.loop();
 }
 
+void ping_loop()
+{
+    static uint32_t lastcall = 0;
 
+    
+    if(WiFi.status() == WL_CONNECTED )
+    {
+        if(millis() > lastcall + 500)
+        {
+            ping();
+            lastcall = millis();
+        }
+    }
+    else
+    {
+        setColorState(TFT_ORANGE);
+        WiFi.disconnect();
+        WiFi.mode(WIFI_OFF);
+        WiFi.mode(WIFI_STA);
+        WiFi.reconnect();
+    }
+}
+
+void tft_init()
+{
+    tft.init();
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.setRotation(0);
+
+    if (TFT_BL > 0)
+    {                                           // TFT_BL has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
+        pinMode(TFT_BL, OUTPUT);                // Set backlight pin to output mode
+        digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); // Turn backlight on. TFT_BACKLIGHT_ON has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
+        // set PWM for backlight brightness
+        ledcSetup(ledChannel, 5000, 8);    // 0-15, 5000, 8
+        ledcAttachPin(TFT_BL, ledChannel); // TFT_BL, 0 - 15
+        autodimm(true);
+    }
+}
+
+void printLocalTime()
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        Serial.println("Failed to obtain time");
+        return;
+    }
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+    Serial.print("Day of week: ");
+    Serial.println(&timeinfo, "%A");
+    Serial.print("Month: ");
+    Serial.println(&timeinfo, "%B");
+    Serial.print("Day of Month: ");
+    Serial.println(&timeinfo, "%d");
+    Serial.print("Year: ");
+    Serial.println(&timeinfo, "%Y");
+    Serial.print("Hour: ");
+    Serial.println(&timeinfo, "%H");
+    Serial.print("Hour (12 hour format): ");
+    Serial.println(&timeinfo, "%I");
+    Serial.print("Minute: ");
+    Serial.println(&timeinfo, "%M");
+    Serial.print("Second: ");
+    Serial.println(&timeinfo, "%S");
+
+    Serial.println("Time variables");
+    char timeHour[3];
+    strftime(timeHour, 3, "%H", &timeinfo);
+    Serial.println(timeHour);
+    char timeWeekDay[10];
+    strftime(timeWeekDay, 10, "%A", &timeinfo);
+    Serial.println(timeWeekDay);
+    Serial.println();
+}
 
 void setup()
 {
     Serial.begin(115200);
     Serial.println("Start");
-    tft.init();
-    tft.setRotation(1);
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(0, 0);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
 
-    if (TFT_BL > 0) { // TFT_BL has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
-         pinMode(TFT_BL, OUTPUT); // Set backlight pin to output mode
-         digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); // Turn backlight on. TFT_BACKLIGHT_ON has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
-    }
-
-    tft.setSwapBytes(true);
-    tft.pushImage(0, 0,  240, 135, ttgo);
-    espDelay(5000);
-
-    tft.setRotation(0);
-    int i = 5;
-    while (i--) {
-        tft.fillScreen(TFT_RED);
-        espDelay(1000);
-        tft.fillScreen(TFT_BLUE);
-        espDelay(1000);
-        tft.fillScreen(TFT_GREEN);
-        espDelay(1000);
-    }
-
+    tft_init();
     button_init();
-
-    esp_adc_cal_characteristics_t adc_chars;
-    esp_adc_cal_value_t val_type = esp_adc_cal_characterize((adc_unit_t)ADC_UNIT_1, (adc_atten_t)ADC1_CHANNEL_6, (adc_bits_width_t)ADC_WIDTH_BIT_12, 1100, &adc_chars);
-    //Check type of calibration value used to characterize ADC
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-        Serial.printf("eFuse Vref:%u mV", adc_chars.vref);
-        vref = adc_chars.vref;
-    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
-        Serial.printf("Two Point --> coeff_a:%umV coeff_b:%umV\n", adc_chars.coeff_a, adc_chars.coeff_b);
-    } else {
-        Serial.println("Default Vref: 1100mV");
+  
+    if( wifi_connect() == WL_CONNECTED) 
+    {
+        Serial.println("WiFi connected");
+        // Init and get the time
+        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+        //printLocalTime();
+    }
+    else
+    {
+        Serial.println("WiFi NOT connected - restarting device!");
+        ESP.restart();
     }
 }
 
-
-
 void loop()
 {
-    if (btnCick) {
-        showVoltage();
-    }
     button_loop();
+    ping_loop();
 }
