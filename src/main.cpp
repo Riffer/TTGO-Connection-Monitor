@@ -51,6 +51,7 @@ struct event
 {
     uint16_t state;
     struct tm timeinfo;
+    boolean realtime;
 };
 
 typedef struct event event_t;
@@ -94,12 +95,15 @@ void showCurrentEvent()
     tft.setRotation(3);
     tft.setTextDatum(MC_DATUM);
 
-    if (!getLocalTime(&event.timeinfo))
-    {
-        return;
-    }
+    //if (!getLocalTime(&event.timeinfo))
+    //{
+    //    return;
+    //}
     char buff[255];
-    strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &event.timeinfo);
+    if(event.realtime)
+        strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &event.timeinfo);
+    else
+        sprintf(buff, " ");
     tft.drawString("Last Update:", tft.width() / 2, tft.height() / 2 - tft.fontHeight() - 2);
     tft.drawString(buff, tft.width() / 2, tft.height() / 2);
 }
@@ -115,7 +119,10 @@ void listLastEvents()
     for (int i = 0; i < events.size(); ++i)
     {
         event_t event = events[i];
-        strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &event.timeinfo);
+        if (event.realtime)
+            strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &event.timeinfo);
+        else
+            sprintf(buff, "                              ");
         tft.setTextColor(TFT_BLACK, event.state);
         tft.println(buff);
     }
@@ -130,7 +137,7 @@ void recordEventState(uint16_t newState)
 
         event_t event;
         event.state = newState;
-        getLocalTime(&event.timeinfo);
+        event.realtime = getLocalTime(&event.timeinfo);
         events.push(event);
         showCurrentEvent();
     }
