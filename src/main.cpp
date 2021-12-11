@@ -6,7 +6,6 @@
 #include <Wire.h>
 #include <ESP32Ping.h>
 #include <Button2.h>
-//#include <esp_adc_cal.h>
 #include <time.h>
 #include "CircularBuffer.h"
 
@@ -60,8 +59,19 @@ CircularBuffer<event_t, 15> events;
 
 void brightness(uint16_t brightness )
 {
+    static uint16_t oldbrightness = -1;
 #if BRIGHTNESS_BOOL
     digitalWrite(TFT_BL, brightness > BRIGHTNESS_MIN ? HIGH : LOW);
+    if (oldbrightness != brightness)
+    {
+        oldbrightness = brightness;
+        if (brightness == BRIGHTNESS_MIN)
+        {
+            tft.writecommand(TFT_DISPOFF);
+        }
+        else
+            tft.writecommand(TFT_DISPON);
+    }
 #else
     ledcWrite(ledChannel, brightness);
 #endif

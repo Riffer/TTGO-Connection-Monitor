@@ -16,3 +16,14 @@ Toggle by
 
 or 
 * by button2 to the current state.
+
+
+## Ideas (no priority sort order)
+* show RSSI in case of event
+* more fancy interface
+* invoke an URL in case of event to trigger external devices (maybe take a photo of a street in case of interferences from vehicles)
+* directly take a photo (device with display an cam exists from TTGO)
+* replace loops and wait for by event driven design for WiFi and Ping
+* use tasks
+* in conjunction use sleep mode and its events to consume less power
+* sounding alarm
