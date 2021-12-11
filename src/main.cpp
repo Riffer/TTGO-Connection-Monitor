@@ -27,6 +27,7 @@
 #define BUTTON_2        0
 
 #define BRIGHTNESS_MIN  0
+#define BRIGHTNESS_BOOL 1
 
 #ifndef CONFIG_EXTERNAL
 const char *ssid = "your access point";
@@ -55,11 +56,16 @@ struct event
 };
 
 typedef struct event event_t;
+CircularBuffer<event_t, 15> events;
 
-// the type of the record is unsigned long: we intend to store milliseconds
-// the buffer can contain up to 10 records
-// the buffer will use a byte for its index to reduce memory footprint
-CircularBuffer<event_t, 10> events;
+void brightness(uint16_t brightness )
+{
+#if BRIGHTNESS_BOOL
+    digitalWrite(TFT_BL, brightness > BRIGHTNESS_MIN ? HIGH : LOW);
+#else
+    ledcWrite(ledChannel, brightness);
+#endif
+}
 
 void autodimm(bool reset = false)
 {
@@ -68,7 +74,7 @@ void autodimm(bool reset = false)
     {
         time_of_dimReset = millis();
         currentBrightness = 255;
-        ledcWrite(ledChannel, currentBrightness);
+        brightness(currentBrightness);
         return;
     }
 
@@ -77,7 +83,7 @@ void autodimm(bool reset = false)
         if (currentBrightness > BRIGHTNESS_MIN)
         {
             currentBrightness = max(currentBrightness - 2, BRIGHTNESS_MIN);
-            ledcWrite(ledChannel, currentBrightness); // 0-15, 0-255 (with 8 bit resolution)
+            brightness(currentBrightness);
         }
         else
         {
@@ -95,10 +101,6 @@ void showCurrentEvent()
     tft.setRotation(3);
     tft.setTextDatum(MC_DATUM);
 
-    //if (!getLocalTime(&event.timeinfo))
-    //{
-    //    return;
-    //}
     char buff[255];
     if(event.realtime)
         strftime(buff, 255, "%A, %B %d %Y %H:%M:%S", &event.timeinfo);
@@ -257,10 +259,13 @@ void tft_init()
     if (TFT_BL > 0)
     {                                           // TFT_BL has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
         pinMode(TFT_BL, OUTPUT);                // Set backlight pin to output mode
+#ifdef BRIGHTNESS_BOOL
         digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); // Turn backlight on. TFT_BACKLIGHT_ON has been set in the TFT_eSPI library in the User Setup file TTGO_T_Display.h
+#else
         // set PWM for backlight brightness
         ledcSetup(ledChannel, 5000, 8);    // 0-15, 5000, 8
         ledcAttachPin(TFT_BL, ledChannel); // TFT_BL, 0 - 15
+#endif
         autodimm(true);
     }
 }
