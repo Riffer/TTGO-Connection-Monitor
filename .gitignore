@@ -6,3 +6,4 @@ lib
 test
 include/config.h
 .travis.yml
+TTGO-WLAN-Checker.code-workspace
